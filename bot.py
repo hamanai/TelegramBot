@@ -23,7 +23,7 @@ if not OWNER_CHAT_ID:
 OWNER_CHAT_ID = int(OWNER_CHAT_ID)
 
 genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.0-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # In-memory conversation history per user (resets if the bot restarts)
 conversations = {}
