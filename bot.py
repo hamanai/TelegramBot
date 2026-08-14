@@ -43,7 +43,7 @@ UI_TEXT = {
             "اگه می‌خواید درباره‌ی منطقه‌ی دیگه‌ای هم بدونید، دستور /start رو بزنید."
         ),
         "cancelled": "مکالمه لغو شد. برای شروع دوباره /start رو بزنید.",
-        "budget_labels": ["۵۰ تا ۷۵ هزار", "۷۵ تا ۱۰۰ هزار", "۱۰۰ تا ۲۰۰ هزار", "بالای ۴۰۰ هزار"],
+        "budget_labels": ["۲۰ تا ۵۰ هزار", "۵۰ تا ۷۵ هزار", "۷۵ تا ۱۰۰ هزار", "۱۰۰ تا ۲۰۰ هزار", "بالای ۴۰۰ هزار"],
     },
     "en": {
         "welcome": (
@@ -59,7 +59,7 @@ UI_TEXT = {
             "If you'd like info about another region, send /start."
         ),
         "cancelled": "Conversation cancelled. Send /start to begin again.",
-        "budget_labels": ["$50K - $75K", "$75K - $100K", "$100K - $200K", "$400K+"],
+        "budget_labels": ["$20K - $50K", "$50K - $75K", "$75K - $100K", "$100K - $200K", "$400K+"],
     },
     "tr": {
         "welcome": (
@@ -75,7 +75,7 @@ UI_TEXT = {
             "Başka bir bölge hakkında bilgi almak isterseniz /start yazabilirsiniz."
         ),
         "cancelled": "Görüşme iptal edildi. Yeniden başlamak için /start yazın.",
-        "budget_labels": ["50-75 Bin $", "75-100 Bin $", "100-200 Bin $", "400 Bin $ Üzeri"],
+        "budget_labels": ["20-50 Bin $", "50-75 Bin $", "75-100 Bin $", "100-200 Bin $", "400 Bin $ Üzeri"],
     },
 }
 
@@ -188,8 +188,9 @@ COUNTRY_TEXT = {
 }
 
 # Budget option keys shared across languages; label shown to owner is always in this fixed format.
-BUDGET_KEYS = ["50_75", "75_100", "100_200", "400_plus"]
+BUDGET_KEYS = ["20_50", "50_75", "75_100", "100_200", "400_plus"]
 BUDGET_LABELS_FOR_OWNER = {
+    "20_50": "$20K - $50K",
     "50_75": "$50K - $75K",
     "75_100": "$75K - $100K",
     "100_200": "$100K - $200K",
