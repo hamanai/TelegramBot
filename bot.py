@@ -1,11 +1,16 @@
 import os
-import json
-import re
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-import google.generativeai as genai
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
+)
 
 # ---------- Configuration ----------
 
@@ -13,101 +18,131 @@ TOKEN = os.getenv("BOT_TOKEN")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN environment variable is not set")
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY environment variable is not set")
-
 OWNER_CHAT_ID = os.getenv("OWNER_CHAT_ID")
 if not OWNER_CHAT_ID:
     raise RuntimeError("OWNER_CHAT_ID environment variable is not set")
 OWNER_CHAT_ID = int(OWNER_CHAT_ID)
 
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-2.5-flash")
+# Conversation states
+ASKING_BUDGET, ASKING_CONTACT = range(2)
 
-# In-memory conversation history per user (resets if the bot restarts)
-conversations = {}
+COUNTRY_INFO = {
+    "greece": {
+        "name": "یونان (آتن) 🇬🇷",
+        "text": (
+            "🇬🇷 *یونان*\n\n"
+            "برای خرید ملک در یونان به بودجه‌ای بین ۲۵۰ تا ۴۰۰ هزار یورو نیاز دارید.\n\n"
+            "مزایای خرید ملک در یونان:\n"
+            "۱. اخذ اقامت اروپا برای سه خانواده (خودتون و همسر و فرزندانتون، پدر و مادر خودتون و همسرتون)\n"
+            "۲. نیاز به حضور ندارید و می‌تونید درآمد خوبی از اجاره داشته باشید"
+        ),
+    },
+    "turkey": {
+        "name": "ترکیه (استانبول، ازمیر) 🇹🇷",
+        "text": (
+            "🇹🇷 *ترکیه*\n\n"
+            "به بودجه‌ای بین ۵۰ هزار تا ۴۰۰ هزار دلار نیاز دارید.\n\n"
+            "- با خرید ۴۰۰ هزار دلاری: پاسپورت و شهروندی ترکیه\n"
+            "- با خرید ۲۰۰ هزار دلاری: اقامت سالیانه‌ی قابل تمدید\n"
+            "- با خرید از ۵۰ هزار دلار (فقط سرمایه‌گذاری): شش ماه در سال اقامت، یا درآمد ده برابری نسبت به آپارتمان با همون مبلغ در ایران"
+        ),
+    },
+    "iran": {
+        "name": "ایران (تهران، مشهد، شهرهای شمالی) 🇮🇷",
+        "text": (
+            "🇮🇷 *ایران*\n\n"
+            "قیمت خرید از ۲۰ هزار دلار به بالا شروع میشه.\n\n"
+            "توجه: با خرید ملک هیچ گزینه‌ی اقامتی برای خارجی‌ها وجود نداره."
+        ),
+    },
+    "cyprus": {
+        "name": "قبرس شمالی (تمام شهرها) 🇨🇾",
+        "text": (
+            "🇨🇾 *قبرس شمالی*\n\n"
+            "هزینه‌ی خرید از ۱۱۰ هزار دلار شروع میشه.\n\n"
+            "- امکان خرید کاملاً اقساطی\n"
+            "- با پیش‌پرداخت ۳۰ هزار دلاری، اقامت به‌راحتی قابل دریافته\n"
+            "- دریافت اقامت بسیار راحته\n"
+            "- توجه: زمان فروش واحد نسبت به ترکیه پروسه‌ی طولانی‌تری داره"
+        ),
+    },
+}
 
-SYSTEM_PROMPT = """تو یک مشاور املاک هستی که برای یک آژانس مشاوره‌ی املاک بین‌المللی کار می‌کنی.
-شرکت در این مناطق فعالیت می‌کند:
-- یونان: شهر آتن
-- قبرس شمالی: تمام شهرها
-- ایران: مشهد، تهران و شهرهای شمالی
-- ترکیه: استانبول و ازمیر
 
-وظیفه‌ی تو:
-1. فقط و فقط درباره‌ی خرید ملک، مزایای سرمایه‌گذاری، و شرایط زندگی در همین مناطق بالا صحبت کن. اگر کاربر سوالی خارج از این موضوع پرسید (مثلا سوال عمومی، فنی، شخصی و غیره)، مودبانه بگو که فقط در زمینه‌ی مشاوره‌ی املاک این مناطق می‌تونی کمک کنی.
-2. با کاربر مثل یک مشاور حرفه‌ای و دوستانه صحبت کن، به فارسی پاسخ بده مگر اینکه کاربر به زبان دیگری بنویسه.
-3. درباره‌ی مزایای هر منطقه (قیمت، اقامت، سرمایه‌گذاری، کیفیت زندگی) اطلاعات کلی و مفید بده.
-4. در طول مکالمه، به آرامی و به‌طور طبیعی این اطلاعات رو از کاربر بپرس (نه همه با هم، یکی‌یکی و طبیعی):
-   - کدام کشور/شهر مورد نظرشونه
-   - بودجه‌ی تقریبی‌شون
-   - یک راه تماس (شماره تلفن، واتساپ یا آیدی تلگرام)
-5. وقتی هر سه مورد بالا (منطقه، بودجه، تماس) رو از کاربر گرفتی، در همون پاسخ یک بلوک مخفی به این شکل دقیق اضافه کن (کاربر این بلوک رو نمی‌بینه، فقط سیستم می‌بینه):
-
-[[LEAD]]{"country": "...", "budget": "...", "contact": "...", "summary": "..."}[[/LEAD]]
-
-فیلد summary باید یک خلاصه‌ی کوتاه فارسی از خواسته‌ی مشتری باشه.
-این بلوک رو فقط یک بار و فقط وقتی هر سه اطلاعات کامل شد بفرست، نه زودتر.
-"""
-
-
-def build_gemini_history(chat_id):
-    if chat_id not in conversations:
-        conversations[chat_id] = model.start_chat(history=[
-            {"role": "user", "parts": [SYSTEM_PROMPT]},
-            {"role": "model", "parts": ["باشه، متوجه شدم. من به عنوان مشاور املاک این مناطق در خدمت مشتریان هستم."]},
-        ])
-    return conversations[chat_id]
+def country_menu_keyboard():
+    buttons = [
+        [InlineKeyboardButton(info["name"], callback_data=key)]
+        for key, info in COUNTRY_INFO.items()
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام! 👋 من دستیار مشاوره‌ی املاک هستم.\n\n"
-        "می‌تونم درباره‌ی خرید ملک و مزایای سرمایه‌گذاری در این مناطق راهنماییتون کنم:\n"
-        "🇬🇷 یونان (آتن)\n"
-        "🇹🇷 ترکیه (استانبول، ازمیر)\n"
-        "🇮🇷 ایران (تهران، مشهد، شهرهای شمالی)\n"
-        "🇨🇾 قبرس شمالی (تمام شهرها)\n\n"
-        "بفرمایید کدوم منطقه مد نظرتونه؟"
+        "می‌تونم درباره‌ی خرید ملک و مزایای سرمایه‌گذاری در این مناطق راهنماییتون کنم.\n"
+        "لطفاً یکی از گزینه‌ها رو انتخاب کنید:",
+        reply_markup=country_menu_keyboard(),
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def country_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    country_key = query.data
+    country = COUNTRY_INFO.get(country_key)
+    if not country:
+        return ConversationHandler.END
+
+    context.user_data["country"] = country["name"]
+
+    await query.message.reply_text(country["text"], parse_mode="Markdown")
+    await query.message.reply_text(
+        "برای ادامه، لطفاً بودجه‌ی تقریبی خودتون رو بنویسید (به دلار یا یورو):"
+    )
+    return ASKING_BUDGET
+
+
+async def budget_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["budget"] = update.message.text
+    await update.message.reply_text(
+        "ممنون. لطفاً یک راه ارتباطی (شماره تلفن، واتساپ یا آیدی تلگرام) بفرستید تا همکاران ما باهاتون تماس بگیرن:"
+    )
+    return ASKING_CONTACT
+
+
+async def contact_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["contact"] = update.message.text
     chat_id = update.effective_chat.id
-    user_text = update.message.text
 
-    try:
-        chat = build_gemini_history(chat_id)
-        response = chat.send_message(user_text)
-        reply_text = response.text
+    country = context.user_data.get("country", "-")
+    budget = context.user_data.get("budget", "-")
+    contact = context.user_data.get("contact", "-")
 
-        # Check if a lead block was included
-        lead_match = re.search(r"\[\[LEAD\]\](.*?)\[\[/LEAD\]\]", reply_text, re.DOTALL)
-        if lead_match:
-            try:
-                lead_data = json.loads(lead_match.group(1))
-                lead_message = (
-                    "🏠 لید جدید از بات!\n\n"
-                    f"👤 چت آیدی مشتری: {chat_id}\n"
-                    f"🌍 کشور/منطقه: {lead_data.get('country', '-')}\n"
-                    f"💰 بودجه: {lead_data.get('budget', '-')}\n"
-                    f"📞 تماس: {lead_data.get('contact', '-')}\n"
-                    f"📝 خلاصه: {lead_data.get('summary', '-')}"
-                )
-                await context.bot.send_message(chat_id=OWNER_CHAT_ID, text=lead_message)
-            except json.JSONDecodeError:
-                pass  # if Gemini format is off, just skip silently
+    lead_message = (
+        "🏠 لید جدید از بات!\n\n"
+        f"👤 چت آیدی مشتری: {chat_id}\n"
+        f"🌍 منطقه‌ی مورد نظر: {country}\n"
+        f"💰 بودجه: {budget}\n"
+        f"📞 تماس: {contact}"
+    )
+    await context.bot.send_message(chat_id=OWNER_CHAT_ID, text=lead_message)
 
-            # Remove the hidden block before showing reply to the user
-            reply_text = re.sub(r"\[\[LEAD\]\].*?\[\[/LEAD\]\]", "", reply_text, flags=re.DOTALL).strip()
+    await update.message.reply_text(
+        "ممنون از اعتماد شما! ✅\n"
+        "اطلاعاتتون برای همکاران ما ارسال شد و به‌زودی باهاتون تماس می‌گیریم.\n\n"
+        "اگه می‌خواید درباره‌ی منطقه‌ی دیگه‌ای هم بدونید، دستور /start رو بزنید."
+    )
+    return ConversationHandler.END
 
-        await update.message.reply_text(reply_text)
 
-    except Exception as e:
-        print(f"Error: {e}")
-        await update.message.reply_text("متاسفم، الان مشکلی پیش اومد. لطفاً دوباره امتحان کنید.")
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("مکالمه لغو شد. برای شروع دوباره /start رو بزنید.")
+    return ConversationHandler.END
 
+
+# ---------- Tiny HTTP server so Render detects an open port ----------
 
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -117,7 +152,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is running")
 
     def log_message(self, format, *args):
-        pass  # silence default request logging
+        pass
 
 
 def run_health_server():
@@ -127,12 +162,28 @@ def run_health_server():
 
 
 def main():
-    # Start a tiny HTTP server in the background so Render detects an open port.
     threading.Thread(target=run_health_server, daemon=True).start()
 
     app = Application.builder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            ASKING_BUDGET: [
+                CallbackQueryHandler(country_selected),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, budget_received),
+            ],
+            ASKING_CONTACT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, contact_received),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=False,
+    )
+
+    app.add_handler(conv_handler)
+    app.add_handler(CallbackQueryHandler(country_selected))
+
     app.run_polling()
 
 
